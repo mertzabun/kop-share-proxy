@@ -40,14 +40,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const target = `${SUPABASE_EDGE_BASE}?${params.toString()}`;
 
     const upstream = await fetch(target, {
-      method: "GET",
-      headers: {
-        // pass user-agent so your edge function can do bot detection reliably
-        "user-agent": req.headers["user-agent"] || "",
-        "accept": req.headers["accept"] || "text/html,*/*",
-      },
-      redirect: "manual",
-    });
+  method: "GET",
+  headers: {
+    // Force bot UA so Supabase always returns OG HTML (200) with og:image
+    "user-agent": "facebookexternalhit/1.1 (+http://www.facebook.com/externalhit_uatext.php)",
+    "accept": "text/html,*/*",
+  },
+  redirect: "manual",
+});
 
     const body = await upstream.arrayBuffer();
 
