@@ -3,67 +3,71 @@ import type { VercelRequest, VercelResponse } from "@vercel/node";
 const SUPABASE_EDGE_BASE =
   "https://sciiqbebbsqznpsjejni.supabase.co/functions/v1/og-meta-renderer";
 
-function stripHopByHopHeaders(headers: Headers) {
-  // Hop-by-hop headers should not be forwarded by proxies
-  const hopByHop = new Set([
-    "connection",
-    "keep-alive",
-    "proxy-authenticate",
-    "proxy-authorization",
-    "te",
-    "trailer",
-    "transfer-encoding",
-    "upgrade",
-  ]);
+// Known social crawlers
+const BOT_UA_PARTS = [
+  "facebookexternalhit",
+  "facebot",
+  "twitterbot",
+  "instagram",
+  "linkedinbot",
+  "slackbot",
+  "discordbot",
+  "whatsapp",
+  "telegrambot",
+  "pinterest",
+  "applebot",
+];
 
-  const out: Record<string, string> = {};
-  headers.forEach((value, key) => {
-    if (!hopByHop.has(key.toLowerCase())) out[key] = value;
-  });
-  return out;
+function isBot(userAgent: string | undefined) {
+  const ua = (userAgent || "").toLowerCase();
+  return BOT_UA_PARTS.some((bot) => ua.includes(bot));
 }
 
-export default async function handler(req: VercelRequest, res: VercelResponse) {
+export default async function handler(
+  req: VercelRequest,
+  res: VercelResponse
+) {
+  const slug = req.query.slug as string;
+
+  if (!slug) {
+    return res.status(400).send("Missing slug");
+  }
+
+  const canonicalUrl = `https://www.thekingofprompt.com/prompts/${slug}`;
+
+  const userAgent = req.headers["user-agent"] as string | undefined;
+
+  // 👤 HUMAN BROWSER → Fast redirect
+  if (!isBot(userAgent)) {
+    res.setHeader("Cache-Control", "no-store");
+    return res.redirect(302, canonicalUrl);
+  }
+
+  // 🤖 BOT → Fetch OG HTML from Supabase
   try {
-    const slug = (req.query.slug as string) || "";
+    const targetUrl = `${SUPABASE_EDGE_BASE}?slug=${slug}`;
 
-    if (!slug) {
-      res.status(400).send("Missing slug");
-      return;
-    }
+    const upstream = await fetch(targetUrl, {
+      headers: {
+        // Force bot UA to Supabase so it returns OG HTML
+        "user-agent":
+          "facebookexternalhit/1.1 (+http://www.facebook.com/externalhit_uatext.php)",
+        accept: "text/html,*/*",
+      },
+      redirect: "manual",
+    });
 
-    // Preserve extra query params (utm, ref, etc.)
-    const incomingUrl = new URL(req.url || "/", "https://share.thekingofprompt.com");
-    const params = new URLSearchParams(incomingUrl.searchParams);
-    params.set("slug", slug);
+    const html = await upstream.text();
 
-    const target = `${SUPABASE_EDGE_BASE}?${params.toString()}`;
+    res.status(200);
+    res.setHeader("Content-Type", "text/html; charset=utf-8");
+    res.setHeader("Cache-Control", "public, max-age=300");
 
-    const upstream = await fetch(target, {
-  method: "GET",
-  headers: {
-    // Force bot UA so Supabase always returns OG HTML (200) with og:image
-    "user-agent": "facebookexternalhit/1.1 (+http://www.facebook.com/externalhit_uatext.php)",
-    "accept": "text/html,*/*",
-  },
-  redirect: "manual",
-});
+    return res.send(html);
+  } catch (error) {
+    console.error("OG proxy error:", error);
 
-    const body = await upstream.arrayBuffer();
-
-    // Copy upstream headers (sanitize)
-    const headers = stripHopByHopHeaders(upstream.headers);
-
-    // Ensure correct content type for OG HTML
-    headers["content-type"] = headers["content-type"] || "text/html; charset=utf-8";
-
-    // Avoid caching surprises during rollout
-    headers["cache-control"] = "no-store";
-
-    res.status(upstream.status);
-    Object.entries(headers).forEach(([k, v]) => res.setHeader(k, v));
-    res.send(Buffer.from(body));
-  } catch (e: any) {
-    res.status(500).send(`Proxy error: ${e?.message || "unknown"}`);
+    // Fail safe → redirect to main site
+    return res.redirect(302, canonicalUrl);
   }
 }
