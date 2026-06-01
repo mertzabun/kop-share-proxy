@@ -1,5 +1,9 @@
 {
   "rewrites": [
+    {
+      "source": "/tt/:path*",
+      "destination": "https://sciiqbebbsqznpsjejni.supabase.co/functions/v1/tiktok-image-proxy/tt/:path*"
+    },
     { "source": "/(.*)", "destination": "/api/share/$1" }
   ]
 }
